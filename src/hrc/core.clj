@@ -1,29 +1,81 @@
 (ns hrc.core
-  (:import
-   (java.net Socket ServerSocket SocketException)
-   (java.io PrintWriter InputStreamReader BufferedReader)))
+  (:import (java.net InetAddress ServerSocket Socket
+                     SocketException)
+           (java.io InputStreamReader OutputStream
+                    OutputStreamWriter PrintWriter BufferedReader)))
 
-(defn accept-connection [server-socket]
-  (try (.accept server-socket)
-       (catch SocketException e)))
+(defn- on-thread [f]
+  (doto (Thread. ^Runnable f)
+    (.start)))
 
-(defn start-server
-  "A chat server accepting requests."
-  [port]
-  (with-open
-      [s-socket (ServerSocket. port)
-       conn (accept-connection s-socket)
-       ;; Input from client
-       in (BufferedReader.
-           (InputStreamReader.
-            (.getInputStream conn)))
-       ;; Writing to client
-       out (PrintWriter. (.getOutputStream conn) true)]
-    ;; /dev/stdout becomes client
+(defn- close-socket [^Socket s]
+  (when-not (.isClosed s)
+    (doto s
+      (.shutdownInput)
+      (.shutdownOutput)
+      (.close))))
+
+(defn- accept-fn [^Socket s connections fun]
+  (let [ins (.getInputStream s)
+        outs (.getOutputStream s)]
+    (on-thread #(do
+                  (dosync (commute connections conj s))
+                  (try
+                    (fun ins outs)
+                    (catch SocketException e))
+                  (close-socket s)
+                  (dosync (commute connections disj s))))))
+
+(defstruct server-def :server-socket :connections)
+
+(defn- create-server-aux [fun ^ServerSocket ss]
+  (let [connections (ref #{})]
+    (on-thread #(when-not (.isClosed ss)
+                  (try
+                    (accept-fn (.accept ss) connections fun)
+                    (catch SocketException e))
+                  (recur)))
+    (struct-map server-def :server-socket ss :connections connections)))
+
+(defn create-server
+  "Creates a server socket on port. Upon accept, a new thread is
+  created which calls:
+
+  (fun input-stream output-stream)
+
+  Optional arguments support specifying a listen backlog and binding
+  to a specific endpoint."
+  ([port fun backlog ^InetAddress bind-addr]
+     (create-server-aux fun (ServerSocket. port backlog bind-addr)))
+  ([port fun backlog]
+     (create-server-aux fun (ServerSocket. port backlog)))
+  ([port fun]
+     (create-server-aux fun (ServerSocket. port))))
+
+(defn close-server [server]
+  (doseq [s @(:connections server)]
+    (close-socket s))
+  (dosync (ref-set (:connections server) #{}))
+  (.close ^ServerSocket (:server-socket server)))
+
+(defn connection-count [server]
+  (count @(:connections server)))
+
+;;; 
+;;; HRC
+;;; 
+;;
+
+(defn handle-client [in out]
+  (binding [*in* (BufferedReader. (InputStreamReader. in))
+            *out* (OutputStreamWriter. out)]
     (loop []
-        (binding [*out* out]
-          (println "Testing:" (.readLine in)))
-        (recur))))
+      (let [input (read-line)]
+        (print
+         (format "Input: %s (thread %s)"
+                 input (Thread/currentThread)))
+        (flush))
+      (recur))))
 
 (defn -main []
-  (print "Hello, World!"))
+  (create-server 8089 handle-client))
