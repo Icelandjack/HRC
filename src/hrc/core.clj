@@ -2,7 +2,8 @@
   (:import (java.net InetAddress ServerSocket Socket
                      SocketException)
            (java.io InputStreamReader OutputStream
-                    OutputStreamWriter PrintWriter BufferedReader)))
+                    OutputStreamWriter PrintWriter BufferedReader))
+  (:use [clojure.string :only [split]]))
 
 (defn- on-thread [f]
   (doto (Thread. ^Runnable f)
@@ -46,7 +47,7 @@
   Optional arguments support specifying a listen backlog and binding
   to a specific endpoint."
   ([port fun backlog ^InetAddress bind-addr]
-     (create-server-aux fun (ServerSocket. port backlog bind-addr)))
+     (create-server-aux fun (ServerSocket. port backlog bind-addr))) ;; new ServerSover(port, backlog, bind-addr)
   ([port fun backlog]
      (create-server-aux fun (ServerSocket. port backlog)))
   ([port fun]
@@ -61,6 +62,13 @@
 (defn connection-count [server]
   (count @(:connections server)))
 
+(defn parse-input  [input]
+  (let [parsed (split input #" ")]
+    (case (keyword (first parsed))
+      :MSG (format "Þú sendir skilaboð %s.\n" (rest parsed))
+      :CD (format "Þú ert kominn í möppu %s.\n" (rest parsed))
+      "wat.\n")))
+
 ;;; 
 ;;; HRC
 ;;; 
@@ -72,10 +80,11 @@
     (loop []
       (let [input (read-line)]
         (print
-         (format "Input: %s (thread %s)"
-                 input (Thread/currentThread)))
+         (str input
+              (parse-input input)))
         (flush))
       (recur))))
 
 (defn -main []
-  (create-server 8089 handle-client))
+  (create-server 8091 handle-client -1
+                 (. InetAddress getByName "localhost")))
